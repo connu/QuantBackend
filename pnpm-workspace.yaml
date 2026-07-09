@@ -11,4 +11,6 @@ allowBuilds:
   '@scarf/scarf': false
   # esbuild's install script places its prebuilt binary — tsx needs it.
   esbuild: true
+  # native accelerator for bullmq's msgpack serialization — optional but fine
+  msgpackr-extract: true
   prisma: true

@@ -1,8 +1,12 @@
+import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { EventEmitterModule } from '@nestjs/event-emitter';
+import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
 import { validateEnv } from './config/env.validation';
 import { DatabaseModule } from './database/database.module';
+import { IngestionModule } from './ingestion/ingestion.module';
 
 /**
  * ELI5: A NestJS app is a tree of Modules, and this is the root of the tree.
@@ -32,6 +36,28 @@ import { DatabaseModule } from './database/database.module';
       envFilePath: ['../../.env', '.env'],
     }),
     DatabaseModule,
+
+    // ScheduleModule discovers every @Cron decorator in the app and arms it.
+    ScheduleModule.forRoot(),
+
+    // In-process pub/sub — how "ingestion finished" reaches the alert
+    // evaluator without those modules knowing about each other.
+    EventEmitterModule.forRoot(),
+
+    // ONE Redis connection config for every queue in the app.
+    // forRootAsync + inject: we can't hardcode the host — it comes from the
+    // validated env, so we ask the DI container to hand us ConfigService.
+    BullModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        connection: {
+          host: config.get<string>('REDIS_HOST'),
+          port: config.get<number>('REDIS_PORT'),
+        },
+      }),
+    }),
+
+    IngestionModule,
   ],
   controllers: [AppController],
 })
