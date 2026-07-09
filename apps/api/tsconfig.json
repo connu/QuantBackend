@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    /* Node runs CommonJS here; NodeNext = "resolve imports the way modern
+       Node actually does", replacing the deprecated legacy resolver. */
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "sourceMap": true,
+    "incremental": true,
+    "skipLibCheck": true,
+
+    /* Decorators are how NestJS works its magic (@Module, @Injectable, ...).
+       These two flags turn on the "old-style" decorators Nest relies on. */
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+
+    /* Strict mode: TypeScript refuses to guess. Worth the friction. */
+    "strict": true,
+    "noImplicitOverride": true,
+    "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true
+  },
+  "include": ["src/**/*"]
+}

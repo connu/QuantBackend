@@ -1,0 +1,15 @@
+{
+  "name": "marketpulse",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NSE market data ingestion service + alert engine (NestJS learning project)",
+  "scripts": {
+    "dev": "pnpm --filter api start:dev",
+    "build": "pnpm -r build",
+    "infra:up": "docker-compose up -d",
+    "infra:down": "docker-compose down"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

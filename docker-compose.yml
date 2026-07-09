@@ -1,0 +1,36 @@
+# ELI5: Docker Compose is a shopping list of servers we want running locally.
+# One command (`docker-compose up -d`) starts them all in the background;
+# our NestJS app then talks to them over localhost ports.
+version: "3.8"
+
+services:
+  # TimescaleDB = normal Postgres with a time-series extension bolted on.
+  # Our price history table becomes a "hypertable" — Postgres transparently
+  # chops it into time-based chunks so date-range queries stay fast forever.
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: marketpulse-db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: marketpulse
+      POSTGRES_PASSWORD: marketpulse
+      POSTGRES_DB: marketpulse
+    volumes:
+      # Named volume = the data survives container restarts/removal.
+      - db-data:/var/lib/postgresql/data
+
+  # Redis is the "waiting room" for BullMQ job queues: ingestion and backfill
+  # jobs sit here until a worker picks them up. If the app crashes mid-job,
+  # the job is still in Redis and gets retried.
+  redis:
+    image: redis:7-alpine
+    container_name: marketpulse-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+volumes:
+  db-data:
+  redis-data:

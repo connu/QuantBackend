@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.next/
+*.log
+
+# Real secrets live in .env — NEVER commit it. .env.example is the template.
+.env
+
+# OS noise
+.DS_Store
