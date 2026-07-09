@@ -47,22 +47,65 @@ export class NseHttpService {
     Referer: 'https://www.nseindia.com/',
   };
 
-  /** Download a file as a Buffer, politely. */
-  download(url: string): Promise<Buffer> {
+  // Cookies for www.nseindia.com. The archives host serves files to anyone
+  // with browser headers, but the main site's API endpoints refuse clients
+  // without a session cookie — you must "visit the homepage" first, like a
+  // browser would. We cache that session and refresh it every few minutes.
+  private sessionCookie = '';
+  private sessionFetchedAt = 0;
+  private static readonly SESSION_TTL_MS = 5 * 60_000;
+
+  /**
+   * Download a file as a Buffer, politely.
+   * `withSession: true` for www.nseindia.com API endpoints (cookie needed).
+   */
+  download(url: string, opts: { withSession?: boolean } = {}): Promise<Buffer> {
     // Append our download to the chain; the chain itself never rejects
     // (failures belong to the caller, not to the queue).
-    const result = this.chain.then(() => this.fetchWithRetry(url));
+    const result = this.chain.then(() => this.fetchWithRetry(url, opts.withSession));
     this.chain = result.catch(() => undefined).then(() => sleep(NseHttpService.GAP_MS));
     return result;
   }
 
-  private async fetchWithRetry(url: string): Promise<Buffer> {
+  private async getSessionCookie(): Promise<string> {
+    const age = Date.now() - this.sessionFetchedAt;
+    if (this.sessionCookie && age < NseHttpService.SESSION_TTL_MS) {
+      return this.sessionCookie;
+    }
+    this.logger.debug('Warming up NSE session (homepage visit for cookies)');
+    const res = await fetch('https://www.nseindia.com/', {
+      headers: NseHttpService.HEADERS,
+    });
+    // getSetCookie() returns each Set-Cookie header; we send back the
+    // name=value pairs like a browser would on the next request.
+    const cookies = res.headers
+      .getSetCookie()
+      .map((c) => c.split(';')[0])
+      .join('; ');
+    if (!cookies) throw new Error('NSE homepage returned no session cookies');
+    this.sessionCookie = cookies;
+    this.sessionFetchedAt = Date.now();
+    return cookies;
+  }
+
+  private async fetchWithRetry(url: string, withSession?: boolean): Promise<Buffer> {
     for (let attempt = 1; ; attempt++) {
       try {
+        // Cookie fetched INSIDE the loop: if attempt 1 fails with 401/403
+        // (stale session), we drop the cookie and attempt 2 warms a new one.
+        const cookie = withSession ? await this.getSessionCookie() : undefined;
         this.logger.debug(`GET ${url} (attempt ${attempt})`);
-        const res = await fetch(url, { headers: NseHttpService.HEADERS });
+        const res = await fetch(url, {
+          headers: cookie
+            ? { ...NseHttpService.HEADERS, Cookie: cookie }
+            : NseHttpService.HEADERS,
+        });
 
         if (res.status === 404) throw new NseFileNotFoundError(url);
+        if (res.status === 401 || res.status === 403) {
+          this.sessionCookie = ''; // force a fresh warm-up on retry
+          throw new Error(`HTTP ${res.status} from ${url} (session rejected)`);
+        }
         if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
 
         return Buffer.from(await res.arrayBuffer());
