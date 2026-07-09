@@ -9,7 +9,9 @@
     "rootDir": "./src",
     "outDir": "./dist",
     "sourceMap": true,
-    "incremental": true,
+    /* NOT "incremental": nest-cli deletes dist on each build, but incremental
+       mode trusts its cache file and then skips re-emitting "unchanged" files
+       — leaving holes in dist. Full builds are fast enough here. */
     "skipLibCheck": true,
 
     /* Decorators are how NestJS works its magic (@Module, @Injectable, ...).
