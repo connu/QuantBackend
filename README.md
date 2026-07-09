@@ -37,4 +37,4 @@ pnpm dev                          # API on :3000, Swagger at /api/docs
 
 ## Status
 
-Being built in 8 checkpoints — see git history. Currently: **3/8 (EOD ingestion live)**.
+Being built in 8 checkpoints — see git history. Currently: **4/8 (2-year backfill running)**.

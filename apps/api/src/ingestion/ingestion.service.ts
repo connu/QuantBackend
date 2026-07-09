@@ -44,8 +44,20 @@ export class IngestionService {
     private readonly events: EventEmitter2,
   ) {}
 
-  /** Ingest both sources (equities + indices) for one day. */
-  async ingestDay(tradeDate: string): Promise<Record<string, SourceOutcome>> {
+  /**
+   * Ingest both sources (equities + indices) for one day.
+   *
+   * `skipIfIngested` is the backfill fast path: when the ledger already
+   * shows a SUCCESS for a source on this day, don't even download — a
+   * 500-day backfill that gets restarted should blast through finished
+   * days in milliseconds, not re-download a gigabyte to learn nothing.
+   * The nightly cron does NOT use it, so late re-publications by NSE are
+   * still caught by the hash check.
+   */
+  async ingestDay(
+    tradeDate: string,
+    opts: { skipIfIngested?: boolean } = {},
+  ): Promise<Record<string, SourceOutcome>> {
     const skip = await this.nonTradingReason(tradeDate);
     if (skip) {
       this.logger.log(`${tradeDate}: ${skip} — skipping`);
@@ -55,8 +67,8 @@ export class IngestionService {
       };
     }
 
-    const equities = await this.ingestEquities(tradeDate);
-    const indices = await this.ingestIndices(tradeDate);
+    const equities = await this.ingestEquities(tradeDate, opts);
+    const indices = await this.ingestIndices(tradeDate, opts);
 
     // Only announce when something new actually landed — listeners treat
     // this as "fresh data exists", so a no-op re-run must stay silent.
@@ -83,12 +95,15 @@ export class IngestionService {
   // Equities
   // -------------------------------------------------------------------------
 
-  private async ingestEquities(tradeDate: string): Promise<SourceOutcome> {
+  private async ingestEquities(
+    tradeDate: string,
+    opts: { skipIfIngested?: boolean } = {},
+  ): Promise<SourceOutcome> {
     const url =
       'https://nsearchives.nseindia.com/content/cm/' +
       `BhavCopy_NSE_CM_0_0_0_${toCompact(tradeDate)}_F_0000.csv.zip`;
 
-    return this.ingestSource(IngestionSource.EQUITY_BHAVCOPY, tradeDate, url, {
+    return this.ingestSource(IngestionSource.EQUITY_BHAVCOPY, tradeDate, url, opts, {
       parse: (buf) => parseBhavcopy(buf),
       write: async (tx, rows, runId, revision) => {
         await tx.eodPrice.createMany({
@@ -144,12 +159,15 @@ export class IngestionService {
   // Indices
   // -------------------------------------------------------------------------
 
-  private async ingestIndices(tradeDate: string): Promise<SourceOutcome> {
+  private async ingestIndices(
+    tradeDate: string,
+    opts: { skipIfIngested?: boolean } = {},
+  ): Promise<SourceOutcome> {
     const url =
       'https://nsearchives.nseindia.com/content/indices/' +
       `ind_close_all_${toDdmmyyyy(tradeDate)}.csv`;
 
-    return this.ingestSource(IngestionSource.INDEX_SNAPSHOT, tradeDate, url, {
+    return this.ingestSource(IngestionSource.INDEX_SNAPSHOT, tradeDate, url, opts, {
       parse: (buf) => parseIndexSnapshot(buf),
       write: async (tx, rows, runId, revision) => {
         await tx.indexValue.createMany({
@@ -193,6 +211,7 @@ export class IngestionService {
     source: IngestionSource,
     tradeDate: string,
     url: string,
+    opts: { skipIfIngested?: boolean },
     ops: {
       parse: (buf: Buffer) => Row[];
       write: (
@@ -216,6 +235,12 @@ export class IngestionService {
       where: { source, tradeDate: date, status: RunStatus.SUCCESS },
       orderBy: { id: 'desc' },
     });
+
+    // Backfill fast path: already done → no download, no new ledger row
+    // (a restarted backfill would otherwise flood the ledger with SKIPPEDs).
+    if (opts.skipIfIngested && priorSuccess) {
+      return { status: RunStatus.SKIPPED, rows: 0, note: 'already ingested' };
+    }
 
     // Step 2: download (may throw NseFileNotFoundError → SKIPPED).
     let buf: Buffer;

@@ -6,6 +6,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
 import { validateEnv } from './config/env.validation';
 import { DatabaseModule } from './database/database.module';
+import { BackfillModule } from './backfill/backfill.module';
 import { IngestionModule } from './ingestion/ingestion.module';
 
 /**
@@ -58,6 +59,7 @@ import { IngestionModule } from './ingestion/ingestion.module';
     }),
 
     IngestionModule,
+    BackfillModule,
   ],
   controllers: [AppController],
 })
