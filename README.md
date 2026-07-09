@@ -21,10 +21,18 @@ docs/      the learning docs, 01 → 08
 ## Quick start
 
 ```bash
-cp .env.example .env        # then fill in values (see comments inside)
-docker-compose up -d        # TimescaleDB + Redis
+# .env at repo root needs at minimum:
+#   PORT=3000
+#   DATABASE_URL=postgresql://marketpulse:marketpulse@localhost:5432/marketpulse
+#   REDIS_HOST=localhost
+#   REDIS_PORT=6379
+# (full list with explanations: apps/api/src/config/env.validation.ts)
+docker-compose up -d              # TimescaleDB + Redis (via colima on this Mac)
 pnpm install
-pnpm dev                    # API on :3000, Swagger at /api/docs
+pnpm --filter api db:generate     # build the Prisma client
+pnpm --filter api db:migrate      # create tables
+pnpm --filter api db:seed         # plant NSE holiday calendar
+pnpm dev                          # API on :3000, Swagger at /api/docs
 ```
 
 ## Status

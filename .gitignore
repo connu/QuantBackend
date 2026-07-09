@@ -6,5 +6,8 @@ dist/
 # Real secrets live in .env — NEVER commit it. .env.example is the template.
 .env
 
+# Prisma regenerates this from schema.prisma (`pnpm --filter api db:generate`)
+apps/api/src/generated/
+
 # OS noise
 .DS_Store

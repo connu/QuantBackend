@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { validateEnv } from './config/env.validation';
+import { DatabaseModule } from './database/database.module';
 
 /**
  * ELI5: A NestJS app is a tree of Modules, and this is the root of the tree.
@@ -30,6 +31,7 @@ import { validateEnv } from './config/env.validation';
       // Our .env lives at the repo root, two levels above apps/api.
       envFilePath: ['../../.env', '.env'],
     }),
+    DatabaseModule,
   ],
   controllers: [AppController],
 })

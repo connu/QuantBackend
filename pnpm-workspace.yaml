@@ -6,4 +6,7 @@ packages:
 # scarf is opt-in download analytics inside a transitive dependency — we
 # don't need it to run anything, so its install script stays blocked.
 allowBuilds:
+  # Prisma's install scripts fetch its query engine — required, allow them.
+  '@prisma/engines': true
   '@scarf/scarf': false
+  prisma: true

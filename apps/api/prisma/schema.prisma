@@ -1,0 +1,262 @@
+// ELI5: This file is the single source of truth for our database shape.
+// Prisma reads it and generates two things:
+//   1. SQL migrations  — versioned scripts that build/evolve the real tables
+//   2. a typed client  — `prisma.eodPrice.findMany(...)` with full TypeScript
+//                        types, so a typo in a column name fails at compile time
+//
+// Convention used here: TypeScript-style camelCase field names, mapped with
+// @map to snake_case column names (what Postgres people expect to see).
+
+generator client {
+  // Prisma 7's generator emits actual TypeScript into our source tree
+  // (versionable, debuggable) instead of hiding JS inside node_modules.
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+// Where's the connection URL? Prisma 7 moved it out of the schema:
+// the CLI reads it from prisma.config.ts, the runtime gets it via the
+// pg driver adapter in src/database/prisma.service.ts.
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Reference data
+// ---------------------------------------------------------------------------
+
+/// Catalog of every stock we've ever seen in a bhavcopy. Not a foreign key
+/// target (prices reference symbols as plain text) — it's a lookup/search
+/// table the ingestion keeps fresh as a side effect.
+model Instrument {
+  id          Int      @id @default(autoincrement())
+  symbol      String
+  series      String   @default("EQ")
+  isin        String?
+  firstSeenAt DateTime @default(now()) @map("first_seen_at")
+  lastSeenAt  DateTime @default(now()) @map("last_seen_at")
+
+  @@unique([symbol, series])
+  @@map("instruments")
+}
+
+/// NSE trading holidays — lets the scheduler skip days where no bhavcopy
+/// will ever exist. Best-effort: an unknown holiday just means one wasted
+/// download attempt, never wrong data.
+model TradingHoliday {
+  date        DateTime @id @db.Date
+  description String
+
+  @@map("trading_holidays")
+}
+
+// ---------------------------------------------------------------------------
+// Time-series data (eod_prices becomes a Timescale hypertable via raw SQL
+// in the migration — Prisma itself doesn't know what a hypertable is)
+// ---------------------------------------------------------------------------
+
+/// One row per stock per trading day per revision. Revisions are how we get
+/// point-in-time correctness: if NSE re-publishes a day's file, the old rows
+/// are NOT overwritten — they get `superseded_at` stamped, and new rows with
+/// revision+1 are inserted. "Current" data = WHERE superseded_at IS NULL.
+model EodPrice {
+  symbol         String
+  series         String
+  tradeDate      DateTime  @db.Date @map("trade_date")
+  open           Decimal   @db.Decimal(14, 4)
+  high           Decimal   @db.Decimal(14, 4)
+  low            Decimal   @db.Decimal(14, 4)
+  close          Decimal   @db.Decimal(14, 4)
+  prevClose      Decimal?  @db.Decimal(14, 4) @map("prev_close")
+  volume         BigInt
+  turnover       Decimal?  @db.Decimal(20, 2)
+  totalTrades    Int?      @map("total_trades")
+  ingestionRunId Int       @map("ingestion_run_id")
+  revision       Int       @default(1)
+  supersededAt   DateTime? @db.Timestamptz(6) @map("superseded_at")
+
+  // The partition column (trade_date) MUST be part of the primary key —
+  // TimescaleDB requires it, because rows are physically stored in
+  // time-based chunks and uniqueness can only be enforced within them.
+  @@id([symbol, series, tradeDate, revision])
+  @@index([tradeDate])
+  @@map("eod_prices")
+}
+
+/// Daily index levels + valuation ratios (this is where "Nifty PE > 25"
+/// reads from). Tiny table (a handful of indices × days), so it stays a
+/// plain Postgres table — hypertables only pay off at scale.
+model IndexValue {
+  indexName      String    @map("index_name")
+  tradeDate      DateTime  @db.Date @map("trade_date")
+  close          Decimal   @db.Decimal(14, 2)
+  open           Decimal?  @db.Decimal(14, 2)
+  high           Decimal?  @db.Decimal(14, 2)
+  low            Decimal?  @db.Decimal(14, 2)
+  pe             Decimal?  @db.Decimal(8, 2)
+  pb             Decimal?  @db.Decimal(8, 2)
+  divYield       Decimal?  @db.Decimal(6, 2) @map("div_yield")
+  ingestionRunId Int       @map("ingestion_run_id")
+  revision       Int       @default(1)
+  supersededAt   DateTime? @db.Timestamptz(6) @map("superseded_at")
+
+  @@id([indexName, tradeDate, revision])
+  @@map("index_values")
+}
+
+// ---------------------------------------------------------------------------
+// Ingestion bookkeeping
+// ---------------------------------------------------------------------------
+
+enum IngestionSource {
+  EQUITY_BHAVCOPY
+  INDEX_SNAPSHOT
+  CORPORATE_ACTIONS
+}
+
+enum RunStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+  SKIPPED // holiday/weekend, or file identical to one already ingested
+}
+
+/// The ledger of every ingestion attempt. This is what makes jobs idempotent
+/// and auditable: before doing work we check this table; after work we record
+/// what happened, including a hash of the source file so a re-download of an
+/// identical file is recognized and skipped.
+model IngestionRun {
+  id         Int             @id @default(autoincrement())
+  source     IngestionSource
+  tradeDate  DateTime        @db.Date @map("trade_date")
+  status     RunStatus       @default(RUNNING)
+  startedAt  DateTime        @default(now()) @map("started_at")
+  finishedAt DateTime?       @map("finished_at")
+  fileHash   String?         @map("file_hash")
+  rowCount   Int?            @map("row_count")
+  error      String?
+
+  @@index([source, tradeDate])
+  @@map("ingestion_runs")
+}
+
+// ---------------------------------------------------------------------------
+// Corporate actions (checkpoint 5)
+// ---------------------------------------------------------------------------
+
+enum CorporateActionType {
+  SPLIT
+  BONUS
+  DIVIDEND
+  OTHER
+}
+
+/// Raw corporate actions as announced by NSE. `purpose` keeps NSE's exact
+/// wording; the parsed fields are our interpretation of it.
+model CorporateAction {
+  id             Int                 @id @default(autoincrement())
+  symbol         String
+  series         String              @default("EQ")
+  exDate         DateTime            @db.Date @map("ex_date")
+  purpose        String
+  actionType     CorporateActionType @map("action_type")
+  // For a split "FV 10 → 2": one old share becomes 5 new ones.
+  // ratioNew/ratioOld = 5/1. Same idea for bonus "1:1" → 2 new per 1 old.
+  ratioNew       Decimal?            @db.Decimal(14, 4) @map("ratio_new")
+  ratioOld       Decimal?            @db.Decimal(14, 4) @map("ratio_old")
+  dividendAmount Decimal?            @db.Decimal(14, 4) @map("dividend_amount")
+  ingestionRunId Int?                @map("ingestion_run_id")
+  createdAt      DateTime            @default(now()) @map("created_at")
+
+  @@unique([symbol, exDate, purpose])
+  @@map("corporate_actions")
+}
+
+/// Price adjustment factor derived from a split/bonus. To compare prices
+/// across the ex-date, multiply every price BEFORE ex_date by `factor`
+/// (e.g. a 10→2 split gives factor 0.2). Raw prices are never rewritten.
+model AdjustmentFactor {
+  id       Int      @id @default(autoincrement())
+  symbol   String
+  exDate   DateTime @db.Date @map("ex_date")
+  factor   Decimal  @db.Decimal(20, 10)
+  actionId Int?     @map("action_id")
+
+  @@unique([symbol, exDate])
+  @@map("adjustment_factors")
+}
+
+// ---------------------------------------------------------------------------
+// Alerts & notifications (checkpoints 6–7)
+// ---------------------------------------------------------------------------
+
+enum AlertTargetType {
+  STOCK
+  INDEX
+}
+
+/// A user-defined rule. `condition` is structured JSON, e.g.
+/// { "all": [ { "indicator": "close", "op": "crosses_above",
+///              "rhs": { "indicator": "sma", "params": { "n": 200 } } } ] }
+model AlertRule {
+  id           Int             @id @default(autoincrement())
+  name         String
+  targetType   AlertTargetType @map("target_type")
+  symbol       String // stock symbol ("RELIANCE") or index name ("NIFTY 50")
+  condition    Json
+  active       Boolean         @default(true)
+  // After firing, stay quiet about this rule for N days — so "close > 3000"
+  // doesn't email you every single evening the condition remains true.
+  cooldownDays Int             @default(7) @map("cooldown_days")
+  createdAt    DateTime        @default(now()) @map("created_at")
+  updatedAt    DateTime        @updatedAt @map("updated_at")
+  events       AlertEvent[]
+
+  @@map("alert_rules")
+}
+
+/// One row per rule-firing. The unique constraint IS the dedup mechanism:
+/// a rule can fire at most once per trading day, enforced by the database
+/// itself, not by hopeful application logic.
+model AlertEvent {
+  id          Int           @id @default(autoincrement())
+  rule        AlertRule     @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  ruleId      Int           @map("rule_id")
+  triggeredOn DateTime      @db.Date @map("triggered_on")
+  details     Json
+  createdAt   DateTime      @default(now()) @map("created_at")
+  deliveries  DeliveryLog[]
+
+  @@unique([ruleId, triggeredOn])
+  @@map("alert_events")
+}
+
+enum DeliveryStatus {
+  SENT
+  FAILED
+  CONSOLE // dev mode: printed instead of emailed
+}
+
+/// Audit trail of every outbound notification (alert emails + daily digests).
+model DeliveryLog {
+  id           Int            @id @default(autoincrement())
+  event        AlertEvent?    @relation(fields: [alertEventId], references: [id], onDelete: SetNull)
+  alertEventId Int?           @map("alert_event_id")
+  kind         String // 'alert' | 'digest'
+  recipient    String
+  subject      String
+  status       DeliveryStatus
+  error        String?
+  createdAt    DateTime       @default(now()) @map("created_at")
+
+  @@map("delivery_log")
+}
+
+/// Symbols featured in the daily digest email's "your watchlist" section.
+model WatchlistItem {
+  symbol  String   @id
+  addedAt DateTime @default(now()) @map("added_at")
+
+  @@map("watchlist")
+}
