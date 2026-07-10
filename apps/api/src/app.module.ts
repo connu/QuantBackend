@@ -6,10 +6,12 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
 import { validateEnv } from './config/env.validation';
 import { DatabaseModule } from './database/database.module';
+import { AlertsModule } from './alerts/alerts.module';
 import { BackfillModule } from './backfill/backfill.module';
 import { CorporateActionsModule } from './corporate-actions/corporate-actions.module';
 import { IngestionModule } from './ingestion/ingestion.module';
 import { MarketDataModule } from './market-data/market-data.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 /**
  * ELI5: A NestJS app is a tree of Modules, and this is the root of the tree.
@@ -64,6 +66,8 @@ import { MarketDataModule } from './market-data/market-data.module';
     BackfillModule,
     CorporateActionsModule,
     MarketDataModule,
+    AlertsModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
 })

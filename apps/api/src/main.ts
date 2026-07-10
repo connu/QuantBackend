@@ -37,7 +37,9 @@ async function bootstrap() {
   const config = app.get(ConfigService);
   const port = config.get<number>('PORT', 3000);
 
-  await app.listen(port);
+  // Bind to loopback only: this API has no authentication (it's a personal
+  // localhost tool), so it must never be reachable from the LAN/café wifi.
+  await app.listen(port, '127.0.0.1');
   console.log(`MarketPulse API up on http://localhost:${port}`);
   console.log(`Swagger docs at     http://localhost:${port}/api/docs`);
 }

@@ -2,6 +2,7 @@ node_modules/
 dist/
 .next/
 *.log
+*.tsbuildinfo
 
 # Real secrets live in .env — NEVER commit it. .env.example is the template.
 .env

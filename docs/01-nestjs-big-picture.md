@@ -110,3 +110,26 @@ apps/api/src/
 Rule of thumb used throughout: **controllers stay skinny** (parse, delegate,
 return), **services hold the logic**, and **each module owns its own tables**
 conceptually — other modules go through its service, not its tables.
+
+
+
+
+# 1. Infrastructure (once per reboot)
+colima start                  # the Docker runtime
+docker-compose up -d          # TimescaleDB + Redis containers
+
+# 2. The API (terminal 1) — must stay running: it hosts the crons & workers
+pnpm dev                      # → http://localhost:3000  (Swagger at /api/docs)
+
+# 3. The dashboard (terminal 2)
+pnpm --filter web dev         # → http://localhost:3001
+
+That's it. The database and its 2 years of data persist in Docker volumes, so steps 1–3 pick up exactly where you left off.
+
+Two variants worth knowing:
+
+- Production-ish (slightly faster, no file watching): pnpm --filter api build && pnpm --filter api start, and pnpm --filter web build && pnpm --filter web start.
+- After the laptop was off during market hours: data for missed days didn't pull itself — run a quick catch-up once the API is up:
+curl -X POST localhost:3000/backfill/start -H 'Content-Type: application/json' -d '{"from":"<first-missed-day>"}'
+
+Full details (email setup, alert recipes, troubleshooting) are in USER_GUIDE.md.

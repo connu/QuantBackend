@@ -14,3 +14,5 @@ allowBuilds:
   # native accelerator for bullmq's msgpack serialization — optional but fine
   msgpackr-extract: true
   prisma: true
+  # sharp = Next.js's image codec binary
+  sharp: true
